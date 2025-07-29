@@ -1,82 +1,48 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from io import BytesIO
 
-st.set_page_config(page_title="キャッシュ生産性アプリ", layout="wide")
+st.set_page_config(layout="wide")
 
-st.sidebar.title("データアップロードと入力")
+st.sidebar.title("キャッシュ生産性アプリ")
+uploaded_file = st.sidebar.file_uploader("CSVファイルをアップロード", type="csv")
 
-uploaded_product_master = st.sidebar.file_uploader("製品マスターCSVをアップロード", type="csv")
-uploaded_data = st.sidebar.file_uploader("生産出荷データCSVをアップロード", type="csv")
-
-product_master = pd.DataFrame()
-if uploaded_product_master:
+if uploaded_file:
     try:
-        product_master = pd.read_csv(uploaded_product_master, encoding="utf-8")
-        st.sidebar.success("製品マスター読み込み成功")
-    except Exception as e:
-        st.sidebar.error(f"製品マスター読み込みエラー: {e}")
+        df = pd.read_csv(uploaded_file, encoding="utf-8")
+    except:
+        df = pd.read_csv(uploaded_file, encoding="shift_jis")
 
-input_data = pd.DataFrame()
-if uploaded_data:
-    try:
-        input_data = pd.read_csv(uploaded_data, encoding="utf-8")
-        st.sidebar.success("生産出荷データ読み込み成功")
-    except Exception as e:
-        st.sidebar.error(f"生産出荷データ読み込みエラー: {e}")
+    st.subheader("入力データ")
+    st.dataframe(df)
 
-st.sidebar.markdown("---")
+    if {"品名", "売上単価", "材料費", "外注費", "出荷数", "生産開始日", "出荷日"}.issubset(df.columns):
+        df["スループット"] = df["売上単価"] - df["材料費"] - df["外注費"]
+        df["生産開始日"] = pd.to_datetime(df["生産開始日"], errors="coerce")
+        df["出荷日"] = pd.to_datetime(df["出荷日"], errors="coerce")
+        df["リードタイム"] = (df["出荷日"] - df["生産開始日"]).dt.days.clip(lower=1)
+        df["TP/LT"] = df["スループット"] / df["リードタイム"]
 
-with st.expander("📋 手動入力", expanded=False):
-    with st.form("manual_input"):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            product_name = st.text_input("品名")
-            sale_price = st.number_input("売上単価", min_value=0.0)
-            material_cost = st.number_input("材料費", min_value=0.0)
-        with col2:
-            outsourcing_cost = st.number_input("外注費", min_value=0.0)
-            start_date = st.date_input("生産開始日")
-            ship_date = st.date_input("出荷日")
-        with col3:
-            quantity = st.number_input("出荷数", min_value=1)
-        submit = st.form_submit_button("追加")
+        st.subheader("集計統計情報")
+        stats = df.groupby("品名")[["スループット", "TP/LT"]].agg(["mean", "max", "min", "std"])
+        st.dataframe(stats)
 
-        if submit:
-            days = max((ship_date - start_date).days, 1)
-            throughput = sale_price - material_cost - outsourcing_cost
-            tplt = throughput / days
-            new_row = pd.DataFrame([{
-                "品名": product_name,
-                "売上単価": sale_price,
-                "材料費": material_cost,
-                "外注費": outsourcing_cost,
-                "生産開始日": start_date,
-                "出荷日": ship_date,
-                "出荷数": quantity,
-                "スループット": throughput,
-                "リードタイム": days,
-                "TP/LT": tplt
-            }])
-            input_data = pd.concat([input_data, new_row], ignore_index=True)
-
-if not input_data.empty:
-    try:
-        input_data["スループット"] = input_data["売上単価"] - input_data["材料費"] - input_data["外注費"]
-        input_data["リードタイム"] = (pd.to_datetime(input_data["出荷日"]) - pd.to_datetime(input_data["生産開始日"])).dt.days.clip(lower=1)
-        input_data["TP/LT"] = input_data["スループット"] / input_data["リードタイム"]
-        input_data["出荷数"] = pd.to_numeric(input_data["出荷数"], errors="coerce")
-
-        st.subheader("📈 グラフ表示")
-        fig = px.scatter(input_data, x="TP/LT", y="スループット", color="品名",
-                         size="出荷数", hover_data=["品名", "スループット", "TP/LT"])
+        st.subheader("バブルチャート")
+        fig = px.scatter(
+            df,
+            x="TP/LT",
+            y="スループット",
+            color="品名",
+            size="出荷数",
+            hover_data=["品名", "スループット", "TP/LT"]
+        )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("📊 集計結果")
-        st.dataframe(input_data)
+        csv = df.to_csv(index=False).encode("utf-8-sig")
+        st.download_button("CSVダウンロード", csv, "集計結果.csv", "text/csv")
 
-        csv = input_data.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 集計結果CSVをダウンロード", data=csv, file_name="キャッシュ生産性_集計結果.csv", mime="text/csv")
-    except Exception as e:
-        st.error(f"データ処理エラー: {e}")
+    else:
+        st.warning("必要な列が含まれていません。")
+else:
+    st.info("左のサイドバーからCSVファイルをアップロードしてください。")
